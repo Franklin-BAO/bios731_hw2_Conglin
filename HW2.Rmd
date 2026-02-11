@@ -1,0 +1,180 @@
+---
+title: "BIOS 731 Homework 2: Simulation Study Investigating the Bootstrap"
+author: "Conglin Bao"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+    latex_engine: xelatex
+header-includes:
+   - \setcounter{section}{-1}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 7,
+  fig.height = 4.5
+)
+```
+
+```{r, include=FALSE}
+source("scripts/00_packages.R")
+source("scripts/01_paths.R")
+source("scripts/02_config.R")
+source("scripts/03_dgm_fit.R")
+source("scripts/04_ci_methods.R")
+source("scripts/05_run_one_rep.R")
+source("scripts/06_scenarios.R")
+source("scripts/07_run_parallel.R")
+source("scripts/08_summarize_plot.R")
+source("scripts/09_helpers.R")
+
+init_project_paths()
+
+```
+
+# GitHub repository link {-}
+Repository (public): https://github.com/Franklin-BAO/bios731_hw2_Conglin.git
+
+# Problem 0: Reproducible structure
+This homework is organized as an R Project. The report is fully reproducible: after cloning the repository, you can open the .Rproj file and knit this HW2.Rmd to regenerate all results. Intermediate simulation outputs are saved as .rds files under data/sim_results/ and are ignored by git via .gitignore.
+
+# Problem 1.1: ADEMP structure
+
+## A (Aim)
+The aim of this simulation study is to evaluate estimation and 95% confidence interval (CI) performance for the treatment effect in multiple linear regression, comparing Wald CIs to two nonparametric bootstrap CI approaches (percentile and bootstrap-t), across varying sample sizes, true treatment effects, and error distributions. We also compare computation time.
+
+---
+
+## D (Data-generating mechanism)
+We generate data from the model:
+
+$$Y_i = \beta_0 + \beta_{\text{treat}} X_{i1} + \epsilon_i,$$
+
+where $X_{i1}$ is a binary treatment indicator (1 = treated, 0 = control). For simplicity, we simulate no additional confounders ($\gamma = 0$). Design factors:
+
+* **sample size:** $n \in \{10, 50, 500\}$
+* **true treatment effect:** $\beta_{\text{treat}} \in \{0, 0.5, 2\}$
+* **error distribution:**
+    * Normal: $\epsilon_i \sim N(0, 2)$
+    * Heavy-tailed: $u \sim t_{\nu}$ with $\nu = 3$, scaled to have variance 2:
+    $$\epsilon_i = u \cdot \sqrt{2 \cdot \frac{\nu - 2}{\nu}}$$
+
+---
+
+## E (Estimand)
+The primary estimand is the true treatment effect $\beta_{\text{treat}}$. We study bias and 95% CI coverage for the estimator $\hat{\beta}_{\text{treat}}$.
+
+---
+
+## M (Methods)
+We compare three 95% CI methods for $\hat{\beta}_{\text{treat}}$:
+
+1.  **Wald CI** from the linear model fit
+2.  **Nonparametric bootstrap percentile CI** ($B = 500$)
+3.  **Nonparametric bootstrap-t CI** (outer $B = 500$; inner $B_{\text{inner}} = 100$)
+
+---
+
+## P (Performance measures)
+* **Bias:** $E[\hat{\beta}_{\text{treat}} - \beta_{\text{treat}}]$
+* **Coverage:** proportion of simulations where the 95% CI contains $\beta_{\text{treat}}$
+* **Distribution of standard error estimates:**
+    * model-based SE from lm (Wald SE)
+    * bootstrap SD of $\hat{\beta}^*$ (for reference)
+* **Computation time** per method (average seconds per simulation replicate)
+
+---
+
+## Number of simulation scenarios
+Full factorial scenarios:
+
+$$3 \text{ (n)} \times 3 \text{ (}\beta_{\text{treat}}\text{)} \times 2 \text{ (error)} = 18 \text{ scenarios.}$$
+
+# Problem 1.2: Choosing nSim based on Monte Carlo error
+
+We target Monte Carlo standard error (MCSE) for coverage no more than 0.01 around 0.95:
+
+$$MCSE = \sqrt{\frac{p(1 - p)}{nSim}}, \quad p = 0.95.$$
+
+Require $MCSE \le 0.01$, so
+
+$$nSim \ge \frac{0.95 \cdot 0.05}{0.01^2} = 475.$$
+
+We use `nSim = 500` per scenario.
+
+```{r, include=FALSE}
+cfg <- get_sim_config(
+  MODE = "final",
+  alpha = 0.05,
+  seed = 42,
+  run_full = FALSE,   
+  force_rerun = FALSE
+)
+
+set.seed(cfg$seed)
+
+scenarios <- make_scenarios(cfg$MODE)
+maybe_clear_results(cfg$force_rerun)
+
+run_all_scenarios_parallel(
+  scenarios = scenarios,
+  nSim = cfg$nSim,
+  B = cfg$B,
+  alpha = cfg$alpha,
+  run_full = cfg$run_full
+)
+
+```
+
+# Problem 1.4: Summarize results across scenarios + make plots
+In this section, I summarize simulation performance across all 18 scenarios and the three CI methods (Wald, nonparametric percentile, nonparametric bootstrap-t). Following the assignment guidance, I report bias of the point estimator, empirical coverage of the nominal 95% CI, the distribution of standard error estimates, and computation time, faceting plots by key design factors (sample size and error distribution).
+Bias is computed as the Monte Carlo average of (theta_hat − beta_true). Coverage is computed as the proportion of replicates in which the true beta_true lies inside the method-specific 95% CI. Standard error summaries include the model-based (plug-in) SE and the bootstrap-based SE (when available). Computation time is summarized per replicate and then aggregated across replicates within each scenario.
+Note: to enable quick execution, the bootstrap-t interval here uses a plug-in studentization within each bootstrap resample rather than a nested (iterated) bootstrap for se*(theta*). I discuss this approximation and its implications in Problem 1.5.
+
+```{r, include=FALSE}
+res_all <- load_all_results(cfg$MODE)
+summ <- summarize_all(res_all)
+make_and_save_plots(summ, cfg$MODE)
+```
+
+```{r,echo=FALSE, out.width="100%"}
+knitr::include_graphics(get_fig_path(paste0("P1_4_bias_", cfg$MODE, ".png")))
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics(get_fig_path(paste0("P1_4_coverage_", cfg$MODE, ".png")))
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics(get_fig_path(paste0("P1_4_se_dist_", cfg$MODE, ".png")))
+```
+
+```{r, echo=FALSE, out.width="100%"}
+knitr::include_graphics(get_fig_path(paste0("P1_4_time_", cfg$MODE, ".png")))
+```
+
+# Problem 1.5 Discussion
+## One-paragraph summary
+
+Overall, the treatment effect estimator is approximately unbiased across all scenarios, and the bias decreases as the sample size increases. When the errors are normally distributed and n > 10, all three interval methods (Wald, percentile bootstrap, and bootstrap-t) achieve coverage close to the nominal 95%, indicating that asymptotic normal approximations are adequate in this setting. Under normally and heavy-tailed errors and n = 10, however, the Wald interval tends to undercover, while both bootstrap methods provide more reliable coverage. The bootstrap and plug-in standard errors are very similar when n is moderate or large, but exhibit substantial variability when n=10. In terms of computation time, Wald is essentially instantaneous, whereas the bootstrap approaches are slower, though the optimized bootstrap-t implementation is comparable to—and slightly faster than—the percentile method.
+
+## How do the different methods compare in computation time?
+
+The Wald interval is consistently the fastest across all scenarios, with essentially negligible computation time per replicate because it only requires a single model fit and a closed-form standard error. Both bootstrap methods are slower due to the need for repeated resampling. However, in this implementation, the percentile bootstrap is actually slower than the bootstrap-t method. This differs from the classical expectation that bootstrap-t is the most computationally intensive approach. The reason is that I implemented a fast version of the bootstrap-t interval that avoids the usual nested (inner) bootstrap. Specifically, I compute a plug-in standard error within each outer bootstrap resample and reuse the same outer bootstrap draws to form studentized statistics, rather than estimating $se^*(\theta^*)$ via an additional inner resampling loop. This removes the $B \times B_{\text{inner}}$ computational burden and reduces the complexity to roughly the same order as the percentile method. As a result, bootstrap-t is slightly faster than percentile in my code, while both remain slower than Wald.
+
+## Which method(s) provide the best coverage when $\epsilon_i \sim N(0, 2)$?
+
+Under normally distributed errors, all three methods provide coverage very close to the nominal 95% level across sample sizes. There is little difference among Wald, percentile bootstrap, and bootstrap-t in this setting. Because Wald achieves comparable accuracy with almost no computational cost, it is the most practical choice when the normality assumption is reasonable.
+
+## Which method(s) provide the best coverage for the heavy-tailed errors?
+
+For heavy-tailed ($t_3$) errors, the Wald and Bootstrap percentile interval tend to undercover, particularly when the sample size is small, reflecting the breakdown of the normal approximation. The bootstrap-t interval generally performs best. Studentization helps account for the increased variability and skewness induced by heavy tails, making bootstrap-t more robust and closer to the nominal level.
+
+## Notable interactions and practical recommendations
+
+Performance improves markedly as the sample size increases: bias shrinks toward zero, standard error estimates stabilize, and coverage for all methods approaches 95%. Differences between methods are most pronounced when the sample size is small and the errors are heavy-tailed. In practice, when the sample size is moderate or large and errors are approximately normal, the Wald interval is recommended due to its simplicity and speed. When the sample size is small or the error distribution is non-normal, a bootstrap approach, particularly bootstrap-t, provides more reliable inference. In this implementation, the fast bootstrap-t method offers improved robustness with only modest additional computational cost, making it an attractive practical compromise.
